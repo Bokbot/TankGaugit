@@ -74,8 +74,8 @@ bool isLevelIncreasing = false;
 void setup() {
     // declare the ledPin as an OUTPUT:
     pinMode(ledPin, OUTPUT);
-    Serial.begin(115200);
-    Serial.println("TankGaugit");
+    //Serial.begin(115200);
+    //Serial.println("TankGaugit");
     gw.begin(incomingMessage, NODE_ID, true);
     // Send the sketch version information to the gateway and Controller
     gw.sendSketchInfo(APPLICATION_NAME, APPLICATION_VERSION);
@@ -110,8 +110,8 @@ void loop() {
 void sendPressureLevel() {
     // read the value from the sensor:
     sensorValue = analogRead(sensorPin);    
-    Serial.print("Pressure is: ");
-    Serial.print(sensorValue);
+    //Serial.print("Pressure is: ");
+    //Serial.print(sensorValue);
 		gw.send(pressmsg.set(sensorValue));
 }
 
@@ -133,8 +133,8 @@ void sendWaterLevel() {
 
     lastDist = dist;
     float percentage;
-    Serial.print(" Distance is: ");
-    Serial.print(dist);
+    //Serial.print(" Distance is: ");
+    //Serial.print(dist);
     //convert it in to percentage 0~100 %
     float level = 0.7f * (dist - LEVEL_TANK_FULL );
     if (level < 0) {
@@ -146,8 +146,8 @@ void sendWaterLevel() {
     }
     gw.send(msg.set(percentage, 2));
     gw.send(distmsg.set(dist));
-    Serial.print(" Percentage is: ");
-    Serial.println(percentage);
+    //Serial.print(" Percentage is: ");
+    //Serial.println(percentage);
 }
 
 void incomingMessage(const MyMessage &message) {
