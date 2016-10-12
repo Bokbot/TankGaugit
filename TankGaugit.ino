@@ -36,6 +36,8 @@
 
 //This node Sensors
 #define S_WATER_DISTANCE_ID (int8_t) 1
+#define DIST_CHILD_ID (int8_t) 2
+#define PRESS_CHILD_ID (int8_t) 3
 
 //Tank water Level
 #define LEVEL_TANK_FULL     (int8_t) 22    // Set your tank water FULL LEVEL
@@ -61,6 +63,9 @@ void sendWaterLevel();
 MySensor gw;
 NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
 MyMessage msg(S_WATER_DISTANCE_ID, V_VOLUME);
+MyMessage distmsg(DIST_CHILD_ID, V_DISTANCE);
+MyMessage pressmsg(PRESS_CHILD_ID, V_PRESSURE);
+
 uint8_t lastDist = 0;
 uint8_t sendLevelDelayTime = 120;
 unsigned long lastSent;
@@ -76,6 +81,8 @@ void setup() {
     gw.sendSketchInfo(APPLICATION_NAME, APPLICATION_VERSION);
     // Register all sensors to gw (they will be created as child devices)
     gw.present(S_WATER_DISTANCE_ID, S_WATER, "Tank");
+	  gw.present(DIST_CHILD_ID, S_DISTANCE, "Distance");
+	  gw.present(PRESS_CHILD_ID, S_BARO, "Pressure");
     MyMessage commandMsg(S_WATER, V_VAR1);
     sendLevelDelayTime = gw.loadState(E_ADR_LEVEL_CHECK_TIME);
     if (sendLevelDelayTime <= 14) {
@@ -103,17 +110,11 @@ void loop() {
 void sendPressureLevel() {
     // read the value from the sensor:
     sensorValue = analogRead(sensorPin);    
-    // turn the ledPin on
-    digitalWrite(ledPin, HIGH);  
-    // stop the program for <sensorValue> milliseconds:
-    delay(sensorValue);          
-    // turn the ledPin off:        
-    digitalWrite(ledPin, LOW);   
-    // stop the program for for <sensorValue> milliseconds:
-    delay(sensorValue);  
     Serial.print("Pressure is: ");
     Serial.print(sensorValue);
+		gw.send(pressmsg.set(sensorValue));
 }
+
 void sendWaterLevel() {
     uint8_t dist = sonar.ping_cm();
     if (lastDist != 0) {
@@ -144,6 +145,7 @@ void sendWaterLevel() {
         percentage = 100.0f - level;
     }
     gw.send(msg.set(percentage, 2));
+    gw.send(distmsg.set(dist));
     Serial.print(" Percentage is: ");
     Serial.println(percentage);
 }
