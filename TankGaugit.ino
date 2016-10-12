@@ -1,128 +1,160 @@
 /**
- * The MySensors Arduino library handles the wireless radio link and protocol
- * between your home built sensors/actuators and HA controller of choice.
- * The sensors forms a self healing radio network with optional repeaters. Each
- * repeater and gateway builds a routing tables in EEPROM which keeps track of the
- * network topology allowing messages to be routed to nodes.
+ * Copyright (C) 2015 Jeeva Kandasamy (jkandasa@gmail.com)
  *
- * Created by Henrik Ekblad <henrik.ekblad@mysensors.org>
- * Copyright (C) 2013-2015 Sensnology AB
- * Full contributor list: https://github.com/mysensors/Arduino/graphs/contributors
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Documentation: http://www.mysensors.org
- * Support Forum: http://forum.mysensors.org
+ *         http://www.apache.org/licenses/LICENSE-2.0
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- *******************************
- *
- * REVISION HISTORY
- * Version 1.0 - Henrik Ekblad
- * 
- * DESCRIPTION
- * Example sketch showing how to create a node thay repeates messages
- * from nodes far from gateway back to gateway. 
- * It is important that nodes that has enabled repeater mode calls  
- * process() frequently. Repeaters should never sleep. 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
-/*
-  Analog Input
- Demonstrates analog input by reading an analog sensor on analog pin 0 and
- turning on and off a light emitting diode(LED)  connected to digital pin 13. 
- The amount of time the LED will be on and off depends on
- the value obtained by analogRead(). 
- 
- The circuit:
- * Potentiometer attached to analog input 0
- * center pin of the potentiometer to the analog pin
- * one side pin (either one) to ground
- * the other side pin to +5V
- * LED anode (long leg) attached to digital output 13
- * LED cathode (short leg) attached to ground
- 
- * Note: because most Arduinos have a built-in LED attached 
- to pin 13 on the board, the LED is optional.
- 
- 
- Created by David Cuartielles
- modified 30 Aug 2011
- By Tom Igoe
- 
- This example code is in the public domain.
- 
- http://arduino.cc/en/Tutorial/AnalogInput
- 
+/**
+ * @author Jeeva Kandasamy (jkandasa)
+ * @since 0.0.1
  */
 
- // ---------------------------------------------------------------------------
-// Example NewPing library sketch that does a ping about 20 times per second.
-// ---------------------------------------------------------------------------
-
-#include <NewPing.h>
-
-#define TRIGGER_PIN  7  // Arduino pin tied to trigger pin on the ultrasonic sensor.
-#define ECHO_PIN     6  // Arduino pin tied to echo pin on the ultrasonic sensor.
-#define MAX_DISTANCE 200 // Maximum distance we want to ping for (in centimeters). Maximum sensor distance is rated at 400-500cm.
-
-NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
-
-// Enable debug prints to serial monitor
-#define MY_DEBUG 
-
-// Enable and select radio type attached
-#define MY_RADIO_NRF24
-//#define MY_RADIO_RFM69
-
-// Enabled repeater feature for this node
-#define MY_REPEATER_FEATURE
+/**
+ * Water level sensor based on ultrasonic sensor.
+ */
 
 #include <SPI.h>
 #include <MySensor.h>
+#include <NewPing.h>
+
+// Application details
+#define APPLICATION_NAME    "Water Level Sensor Node"
+#define APPLICATION_VERSION "0.0.1"
+
+//My node Id
+#define NODE_ID AUTO
+
+//This node Sensors
+#define S_WATER_DISTANCE_ID (int8_t) 1
+
+//Tank water Level
+#define LEVEL_TANK_FULL     (int8_t) 22    // Set your tank water FULL LEVEL
+#define LEVEL_TANK_EMPTY    (int8_t) 165   // Set your tank water EMPTY LEVEL
+
+//^^^^ which is calculated as 0.7 (165-22 -> 100/142) ~= 0.7
+
+//EEPROM Address
+#define E_ADR_LEVEL_CHECK_TIME (int8_t) 15 //in seconds
+
+#define TRIGGER_PIN  7  // Arduino pin tied to trigger pin on the ultrasonic sensor.
+#define ECHO_PIN     6  // Arduino pin tied to echo pin on the ultrasonic sensor.
+#define MAX_DISTANCE 350 // Maximum distance we want to ping for (in centimeters). Maximum sensor distance is rated at 400-500cm.
+#define SLEEP_TIME (unsigned long)1000l*15 // Sleep time between reads (in milliseconds)
 
 int sensorPin = A1;    // select the input pin for the potentiometer
 int ledPin = 13;      // select the pin for the LED
 int sensorValue = 0;  // variable to store the value coming from the sensor
 
+void incomingMessage(const MyMessage &message);
+void sendWaterLevel();
+
+MySensor gw;
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
+MyMessage msg(S_WATER_DISTANCE_ID, V_VOLUME);
+uint8_t lastDist = 0;
+uint8_t sendLevelDelayTime = 120;
+unsigned long lastSent;
+bool isLevelIncreasing = false;
 
 void setup() {
-  // declare the ledPin as an OUTPUT:
-  pinMode(ledPin, OUTPUT);    
-  Serial.begin(115200);
-  Serial.println("TankGaugit");
+    // declare the ledPin as an OUTPUT:
+    pinMode(ledPin, OUTPUT);
+    Serial.begin(115200);
+    Serial.println("TankGaugit");
+    gw.begin(incomingMessage, NODE_ID, true);
+    // Send the sketch version information to the gateway and Controller
+    gw.sendSketchInfo(APPLICATION_NAME, APPLICATION_VERSION);
+    // Register all sensors to gw (they will be created as child devices)
+    gw.present(S_WATER_DISTANCE_ID, S_WATER, "Tank");
+    MyMessage commandMsg(S_WATER, V_VAR1);
+    sendLevelDelayTime = gw.loadState(E_ADR_LEVEL_CHECK_TIME);
+    if (sendLevelDelayTime <= 14) {
+        sendLevelDelayTime = 15;
+    }
+
+    gw.send(commandMsg.set(sendLevelDelayTime)); //Send current state of delay time
+    lastSent = millis();
 }
 
-void presentation()  
-{  
+void loop() {
+    gw.process();
+    //This is to avoid infinite loop, This number will overflow (go back to zero), after approximately 50 days.
+    //https://www.arduino.cc/en/reference/millis
+    if (millis() <= 3 * 1000l) {
+        lastSent = millis();
+    } else if ((lastSent + (sendLevelDelayTime * 1000l)) <= millis()) {
+        lastSent = millis();
+        sendWaterLevel();
+        sendPressureLevel();
+
+    }
 }
 
-void loop() 
-{
-  // read the value from the sensor:
-  sensorValue = analogRead(sensorPin);    
-  // turn the ledPin on
-  digitalWrite(ledPin, HIGH);  
-  // stop the program for <sensorValue> milliseconds:
-  delay(sensorValue);          
-  // turn the ledPin off:        
-  digitalWrite(ledPin, LOW);   
-  // stop the program for for <sensorValue> milliseconds:
-  delay(sensorValue);  
-  Serial.print("Pressure is: ");
-  Serial.println(sensorValue);
-    // establish variables for duration of the ping,
-  // and the distance result in inches and centimeters:
-  long duration, inches, cm;
+void sendPressureLevel() {
+    // read the value from the sensor:
+    sensorValue = analogRead(sensorPin);    
+    // turn the ledPin on
+    digitalWrite(ledPin, HIGH);  
+    // stop the program for <sensorValue> milliseconds:
+    delay(sensorValue);          
+    // turn the ledPin off:        
+    digitalWrite(ledPin, LOW);   
+    // stop the program for for <sensorValue> milliseconds:
+    delay(sensorValue);  
+    Serial.print("Pressure is: ");
+    Serial.print(sensorValue);
+}
+void sendWaterLevel() {
+    uint8_t dist = sonar.ping_cm();
+    if (lastDist != 0) {
+        if (lastDist > dist) {
+            if (!isLevelIncreasing) {
+                dist = lastDist;
+                isLevelIncreasing = true;
+            }
+        } else if (lastDist < dist) {
+            if (isLevelIncreasing) {
+                dist = lastDist;
+                isLevelIncreasing = false;
+            }
+        }
+    }
 
-  unsigned int uS = sonar.ping();     // Send ping, get ping time in microseconds (uS).
-  Serial.print("Ping: ");
-  Serial.print(uS / US_ROUNDTRIP_CM); // Convert ping time to distance in cm and print result (0 = outside set distance range)
-  Serial.println("cm");
-  delay(50);                          // Wait 50ms between pings (about 20 pings/sec). 29ms should be the shortest delay between pings.
-  
+    lastDist = dist;
+    float percentage;
+    Serial.print(" Distance is: ");
+    Serial.print(dist);
+    //convert it in to percentage 0~100 %
+    float level = 0.7f * (dist - LEVEL_TANK_FULL );
+    if (level < 0) {
+        percentage = 100.0f + (level * -1);
+    } else if (level > 100.0f) {
+        percentage = 0.0f;
+    } else {
+        percentage = 100.0f - level;
+    }
+    gw.send(msg.set(percentage, 2));
+    Serial.print(" Percentage is: ");
+    Serial.println(percentage);
 }
 
-
-
+void incomingMessage(const MyMessage &message) {
+    if (message.type == V_VAR1) {
+        if (message.getInt() == 0) {
+            sendWaterLevel();
+        } else if ((message.getInt() >= 15) && (message.getInt() <= 250)) {
+            gw.saveState(E_ADR_LEVEL_CHECK_TIME, (uint8_t) message.getInt());
+            sendLevelDelayTime = gw.loadState(E_ADR_LEVEL_CHECK_TIME);
+        }
+    }
+}
